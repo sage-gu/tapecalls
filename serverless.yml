@@ -1,0 +1,136 @@
+# Welcome to Serverless!
+#
+# This file is the main config file for your service.
+# It's very minimal at this point and uses default values.
+# You can always add more config options for more control.
+# We've included some commented out config examples here.
+# Just uncomment any of them to get that config option.
+#
+# For full config options, check the docs:
+#    docs.serverless.com
+#
+# Happy Coding!
+
+service: tapecalls
+# app and org for use with dashboard.serverless.com
+app: voicemail
+org: gujievivi
+
+# You can pin your service to only deploy with a specific Serverless version
+# Check out our docs for more details
+# frameworkVersion: "=X.X.X"
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  profile: serverless
+  region: ${opt:region, 'us-east-1'} # Transcribe isn't in ap-southeast-2
+  stage: ${opt:stage, 'prod'}
+  logRetentionInDays: 30
+  memorySize: 128
+  timeout: 300
+
+custom:
+  params:
+    accountId: 274782887682
+    amazonConnectCcpUrl: 'https://tapecalls.awsapps.com/connect/ccp'
+    amazonConnectRegion: 'us-east-1'
+    amazonConnectLogGroupName: '/aws/connect/tapecalls'
+    amazonConnectAccessRoleArn: 'YOUR_CONNECT_ACCESS_ROLE_ARN'
+    amazonConnectInstanceArn: 'YOUR_CONNECT_INSTANCE_ARN'
+    # These secret params need to be set in SSM Parameter store:
+    # agentCcpUsername: ${ssm:/${self:service}/agentLogin/ccpUsername}
+    # agentCcpPassword: ${ssm:/${self:service}/agentLogin/ccpPassword~true}
+    agentCcpUsername: 'voicemail'
+    agentCcpPassword: 'Gujie2593'
+    recordingRetentionInDays: 1
+
+  common:
+    voicemailBucket:  'tapecalls-recording'
+    agentLoginTopic: 'tapecalls-agentLogin'
+    agentLoginTopicArn: "arn:aws:sns:${self:custom.params.amazonConnectRegion}:${self:custom.params.accountId}:${self:custom.common.agentLoginTopic}"
+    notificationTopic: 'Connect'
+    notificationTopicArn: "arn:aws:sns:${self:custom.params.amazonConnectRegion}:${self:custom.params.accountId}:${self:custom.common.notificationTopic}"
+    amazonConnectLogGroup: "arn:aws:logs:${self:custom.params.amazonConnectRegion}:${self:custom.params.accountId}:log-group:${self:custom.params.amazonConnectLogGroupName}:*"
+    # arn:aws:sns:us-east-1:274782887682:Connect
+    # arn:aws:logs:us-east-1:274782887682:log-group:/aws/connect/tapecalls:*
+
+  hooks:
+    package:initialize:
+      - npm run package 
+
+functions:
+  processVoicemail:
+    handler: voicemail.process
+    description: "Processes new voicemail recordings by transcribing and notifying via an SNS topic."
+    events:
+      - s3:
+          bucket: ${self:custom.common.voicemailBucket}
+          event: s3:ObjectCreated:*
+    environment:
+      AGENT_LOGIN_TOPIC: ${self:custom.common.agentLoginTopicArn}
+      NOTIFICATION_TOPIC: ${self:custom.common.notificationTopicArn}
+      NOTIFICATION_TIMEZONE: Australia/Perth
+      LINK_EXPIRY_IN_DAYS: 7
+      CONNECT_REGION: ${self:custom.params.amazonConnectRegion}
+      CONNECT_LOG_GROUP: ${self:custom.params.amazonConnectLogGroupName}
+    onError: ${self:custom.common.notificationTopicArn}
+    iamRoleStatementsName: ${self:service}-${self:provider.stage}-processVoicemail-lambdaRole
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - logs:FilterLogEvents
+        Resource: ${self:custom.common.amazonConnectLogGroup}
+      - Effect: Allow
+        Action:
+          - transcribe:StartTranscriptionJob
+          - transcribe:GetTranscriptionJob
+        Resource: "*"
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+        Resource: "arn:aws:s3:::${self:custom.common.voicemailBucket}/*"
+      - Effect: Allow
+        Action:
+          - sns:Publish
+        Resource:
+          - ${self:custom.common.notificationTopicArn}
+          - ${self:custom.common.agentLoginTopicArn}
+
+  agentLogin:
+    handler: agent.login
+    description: "Logs into the CCP as the voicemail agent/user and ensures they're Available to take calls."
+    memorySize: 1536 # uses 500MB, but higher memory gets more cpu
+    events:
+      - sns:
+          topicName: ${self:custom.common.agentLoginTopic}
+          displayName: Triggers lambda to ensure a voicemail agent is available to handle calls
+      - schedule: cron(0, 8, *, *, ?, *) # 4PM AWST daily
+    environment:
+      CCP_URL: ${self:custom.params.amazonConnectCcpUrl}
+      CCP_USERNAME: ${self:custom.params.agentCcpUsername}
+      CCP_PASSWORD: ${self:custom.params.agentCcpPassword}
+      NOTIFICATION_TOPIC: ${self:custom.common.notificationTopicArn}
+    onError: ${self:custom.common.notificationTopicArn}
+
+  agentLoginAsync:
+    handler: agent.loginAsync
+    description: "Sends an SNS message to trigger the agentLogin handler asynchronously, to avoid blocking. Invoked by Contact Flows directly."
+    environment:
+      AGENT_LOGIN_TOPIC: ${self:custom.common.agentLoginTopicArn}
+      NOTIFICATION_TOPIC: ${self:custom.common.notificationTopicArn}
+    onError: ${self:custom.common.notificationTopicArn}
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - sns:Publish
+        Resource:
+          - ${self:custom.common.agentLoginTopicArn}
+
+package:
+  artifact: ./package.zip
+
+plugins:
+  - serverless-hooks-plugin
+  - serverless-iam-roles-per-function
+  - serverless-pseudo-parameters
