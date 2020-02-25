@@ -4,16 +4,23 @@ const agent = require('./agent');
 const cwl = require('./aws/cwl');
 const s3 = require('./aws/s3');
 const sns = require('./aws/sns');
-const transcribe = require('./aws/transcribe');
+// const transcribe = require('./aws/transcribe');
+const mongoose = require('mongoose');
+const Schema = mongoose.Schema;
 
 const CONNECT_LOG_GROUP = process.env.CONNECT_LOG_GROUP;
 const NOTIFICATION_TOPIC = process.env.NOTIFICATION_TOPIC;
 const NOTIFICATION_TIMEZONE = process.env.NOTIFICATION_TIMEZONE;
 const LINK_EXPIRY_IN_DAYS = parseInt(process.env.LINK_EXPIRY_IN_DAYS, 10);
 const LINK_EXPIRY_IN_SECONDS = LINK_EXPIRY_IN_DAYS * 86400;
-const TRANSCRIBE_WAIT_SECONDS = 240;
+// const TRANSCRIBE_WAIT_SECONDS = 240;
 const VOICEMAIL_PROCESSED_EVENT = 'VOICEMAIL_PROCESSED';
 const SEARCH_PERIOD_IN_DAYS = 3;
+const MONGODB_CLUSTER_URI_DEV_NEW = process.env.MONGODB_CLUSTER_URI_DEV_NEW;
+
+// TEST when using decrypted uri
+// decrypt uri once
+let decryptedUri = MONGODB_CLUSTER_URI_DEV_NEW;
 
 /**
  * Process voicemail recordings.
@@ -44,12 +51,13 @@ exports.process = async (event) => {
       return {success: true};
     }
 
-   voicemail.transcript = await transcribeRecording(voicemail);
+    voicemail.transcript = await transcribeRecording(voicemail);
     voicemail.preSignedUrl = await getPresignedS3Url(voicemail);
 
-     await sendNotification(voicemail);
+    await sendNotification(voicemail);
+    await sentToDB(voicemail);
 
-    return {success: true};
+    // return {success: true};
   } catch (err) {
     console.error(err);
     await sns.publish({
@@ -128,15 +136,16 @@ function parseCallAttributes(events) {
  * @return {string} - The transcript of the call recording.
  */
 async function transcribeRecording({objectUrl}) {
-  const job = await transcribe.startJob({mediaFileUri: objectUrl});
+  return 'add later';
+  // const job = await transcribe.startJob({mediaFileUri: objectUrl});
 
-  // Wait for the transcribe job to complete, it takes at least 60 seconds.
-  // This could be improved by using step functions or SQS in future.
-  const transcript = await transcribe.awaitJob({
-    jobName: job.TranscriptionJobName,
-    waitSeconds: TRANSCRIBE_WAIT_SECONDS,
-  });
-  return transcript;
+  // // Wait for the transcribe job to complete, it takes at least 60 seconds.
+  // // This could be improved by using step functions or SQS in future.
+  // const transcript = await transcribe.awaitJob({
+  //   jobName: job.TranscriptionJobName,
+  //   waitSeconds: TRANSCRIBE_WAIT_SECONDS,
+  // });
+  // return transcript;
 }
 
 /**
@@ -338,7 +347,88 @@ Download (requires log-in): ${voicemail.consoleUrl}
 // JSDOC TYPE DEFINITIONS:
 
 /**
- * @param {Error} an error if one occured, otherwise null.
+ * @param {Error} voicemail error if one occured, otherwise null.
  * @param {Object} response object.
  */
+function sentToDB(voicemail) {
+  console.log('============== go to db and save info');
+  const creationDate = formatDate(DateTime.fromISO(voicemail.creationDate));
+  const expiryDate = formatDate(DateTime.local().plus({
+    days: LINK_EXPIRY_IN_DAYS,
+  }));
+
+  let processedEvent = {
+    'contactId': `${voicemail.contactId}`,
+    'queueId': `${voicemail.queueId}`,
+    'caller': `${voicemail.callingNumber}`,
+    'calledAt': `${creationDate}`,
+    'purpose': `${voicemail.purpose}`,
+    'transcript': `${voicemail.transcript}`,
+    'download': `${voicemail.preSignedUrl}`,
+    'expiryDate': `${expiryDate}`,
+  };
+
+  console.log('==============processedEvent', processedEvent);
+  try {
+    saveToDB(processedEvent);
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+// voicemail
+const voicemailsSchema = new mongoose.Schema({
+  _id: Schema.Types.ObjectId,
+  caller: String,
+  calledAt: String,
+  createdAt: Date,
+  purpose: String,
+  transcript: String,
+  download: String,
+  expiryDate: String,
+  contactId: String,
+  queueId: String,
+});
+const VoicemailsModel = mongoose.model('voicemails', voicemailsSchema);
+
+/**
+* Send an SNS message to a topic that triggers the login lambda.
+*
+* @param {Object} event - Parameters to be pased to the lambda.
+ * @return {Object} - Return.
+*/
+async function saveToDB(event) {
+  console.log('----------------saveToDB event', event);
+  try {
+      await mongoose.connect(decryptedUri, {useNewUrlParser: true,
+          useUnifiedTopology: true, useFindAndModify: false});
+  } catch (error) {
+      const errString = JSON.stringify(error);
+      console.log('----------------mongoose error', errString);
+      // await sns.publish({
+      //     topicArn: NOTIFICATION_TOPIC,
+      //     subject: 'mongoose connect failed',
+      //     message: errString,
+      //   });
+      const success = false;
+      return {success, errString};
+  }
+
+  mongoose.set('bufferCommands', false);
+  let aVoicemails = new VoicemailsModel(event);
+  aVoicemails.createdAt = Date();
+  const query = {download: event['download']};
+  const options = {upsert: true, new: true, setDefaultsOnInsert: true};
+  // `doc` is the document _before_ `update` was applied
+  let model = await VoicemailsModel.findOneAndUpdate(query,
+      aVoicemails, options);
+  console.log('-----model:', model);
+  // model = await VoicemailsModel.findOne(query);
+  // await sns.publish({
+  //     topicArn: NOTIFICATION_TOPIC,
+  //     subject: 'mongoose findOneAndUpdate',
+  //     message: model.download,
+  //   });
+ return {success: true};
+};
 

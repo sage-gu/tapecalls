@@ -61,7 +61,7 @@ custom:
 
 functions:
   processVoicemail:
-    handler: voicemail.process
+    handler: src/voicemail.process
     description: "Processes new voicemail recordings by transcribing and notifying via an SNS topic."
     events:
       - s3:
@@ -74,6 +74,7 @@ functions:
       LINK_EXPIRY_IN_DAYS: 7
       CONNECT_REGION: ${self:custom.params.amazonConnectRegion}
       CONNECT_LOG_GROUP: ${self:custom.params.amazonConnectLogGroupName}
+      MONGODB_CLUSTER_URI_DEV_NEW: "mongodb+srv://sage:gujie2593@cluster0-lx2np.mongodb.net/tapecalls"
     onError: ${self:custom.common.notificationTopicArn}
     iamRoleStatementsName: ${self:service}-${self:provider.stage}-processVoicemail-lambdaRole
     iamRoleStatements:
@@ -126,6 +127,15 @@ functions:
           - sns:Publish
         Resource:
           - ${self:custom.common.agentLoginTopicArn}
+  # deprecated 
+  saveToDB:
+    handler: src/db.saveToDB
+    description: "save s3 file URL and contant info."
+    memorySize: 1536 # uses 500MB, but higher memory gets more cpu
+    environment:
+      MONGODB_CLUSTER_URI_DEV_NEW: "mongodb+srv://sage:gujie2593@cluster0-lx2np.mongodb.net/tapecalls"
+      NOTIFICATION_TOPIC: ${self:custom.common.notificationTopicArn}
+    onError: ${self:custom.common.notificationTopicArn}
 
 package:
   artifact: ./package.zip
