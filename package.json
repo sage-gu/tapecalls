@@ -13,6 +13,7 @@
     "aws-sdk": "^2.257.1",
     "axios": "^0.18.0",
     "chrome-aws-lambda": "^1.20.4",
+    "dotenv": "^8.2.0",
     "iltorb": "^2.4.4",
     "lambda-local": "^1.6.3",
     "luxon": "^1.2.1",

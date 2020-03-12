@@ -14,6 +14,16 @@ Install project dependencies:
 $ npm install
 ```
 
+Deplay:  
+```
+$ npm install
+```
+
+Local Test:  
+```
+$ npm install
+```
+
 Customise the values in the custom.param section of serverless.yml.  
 Some changes to resource names in the resources section will probably also be needed.  
 

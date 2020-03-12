@@ -10,6 +10,9 @@ const chromium = require('chrome-aws-lambda');
 const puppeteer = require('puppeteer-core');
 // const puppeteerWithChromium = require('puppeteer');
 const sns = require('./aws/sns');
+const dotenv = require('dotenv');
+console.log(dotenv);
+// dotenv.load();
 
 const NOTIFICATION_TOPIC = process.env.NOTIFICATION_TOPIC;
 const AGENT_LOGIN_TOPIC = process.env.AGENT_LOGIN_TOPIC;
@@ -17,6 +20,8 @@ const CCP_URL = process.env.CCP_URL;
 const CCP_USERNAME = process.env.CCP_USERNAME;
 const CCP_PASSWORD = process.env.CCP_PASSWORD;
 const CALL_IN_PROGRESS_EVENT = 'CALL_IN_PROGRESS';
+
+console.log(process.env);
 
 /**
  * Trigger another lambda function via SNS, to avoid blocking calling processes
